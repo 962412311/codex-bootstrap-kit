@@ -4,7 +4,9 @@
 
 ## Rule
 
-Always prefix shell commands with `rtk`.
+Use `rtk` for noisy or long-running commands where token filtering helps, especially build, test, deploy, git, npm, cargo, and pytest flows.
+
+Use the raw command directly when you need exact output, when inspecting small files, or when `rtk` compatibility is uncertain.
 
 Examples:
 

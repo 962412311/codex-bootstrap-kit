@@ -3,3 +3,14 @@ __pycache__/
 .pytest_cache/
 *.bak_before_py_fix
 .DS_Store
+logs/
+codex-home/auth.json
+codex-home/config.toml
+codex-home/state*.sqlite*
+codex-home/sessions/
+codex-home/memories/
+codex-home/cache/
+codex-home/plugins/
+codex-home/log/
+codex-home/shell-snapshots/
+codex-home/vendor_imports/**/.git/
