@@ -1,35 +1,61 @@
-# My Tools
+# Codex Tooling
 
-这个仓库维护我日常可复用的工具脚本，目标是把零散脚本统一收纳、说明清楚、便于扩展。
+这个仓库只维护当前已验证的 Codex 初始化工具集。它不是完整的
+`$HOME/.codex` 备份，也不负责自动安装或更新 skills。
 
-## 目录
+## 内容
 
-- [scripts/README.md](scripts/README.md)：脚本总索引
-- [AGENTS.md](AGENTS.md)：仓库维护约定
+- [codex-home/AGENTS.md](codex-home/AGENTS.md)：Codex 初始化 Agent 规则入口
+- [codex-home/RTK.md](codex-home/RTK.md)：RTK 命令代理约定
+- [codex-home/path.sh](codex-home/path.sh)：Codex PATH 与 `apply_patch` wrapper 配置
+- [docs/codex-skill-scope.md](docs/codex-skill-scope.md)：当前裁剪后的 skill 范围记录
+- [AGENTS.md](AGENTS.md)：仓库维护规则
 
-## 当前工具
+## 安装 Codex CLI
 
-- [scripts/sysroot/repair_sysroot_paths.py](scripts/sysroot/repair_sysroot_paths.py)：修复 sysroot 中泄露的绝对路径、重复前缀，以及常见绝对符号链接问题
-- [scripts/start.sh](scripts/start.sh)：基于脚本内部变量的一键启动器，可配置应用名称、应用目录和是否全屏
-- [scripts/claude/rate_limit_auto_continue/](scripts/claude/rate_limit_auto_continue/README.md)：Claude 限额后自动继续的 hook、后台 worker 和安装说明
-- [scripts/claude/arm_crosscompile_test/](scripts/claude/arm_crosscompile_test/README.md)：当前项目 ARM 交叉编译、部署和测试 skill 归档
-- [scripts/claude/claude_api/](scripts/claude/claude_api/README.md)：Claude API skill 归档，包含 frontmatter 修复后的版本
-
-## 使用方式
-
-先看脚本对应的索引说明，再根据参数直接执行。大多数脚本都支持 `--help`。
+macOS 不需要区分 Intel 或 Apple Silicon，直接安装最新版本：
 
 ```bash
-python3 scripts/sysroot/repair_sysroot_paths.py --help
-python3 scripts/sysroot/repair_sysroot_paths.py --sysroot /opt/sysroot/binary --dry-run
-python3 scripts/sysroot/repair_sysroot_paths.py --sysroot /opt/sysroot/binary
-./scripts/start.sh
-./scripts/claude/rate_limit_auto_continue/install.sh
+npm install -g @openai/codex@latest
 ```
+
+Linux 同样使用这一条 npm 安装命令。平台架构由 Codex npm 包的
+optional dependency 和 `codex-home/path.sh` 在运行时识别。
+
+## 平台支持
+
+`codex-home/path.sh` 运行时支持以下 Codex npm optional package 布局：
+
+- Linux x64：`@openai/codex-linux-x64`
+- Linux arm64：`@openai/codex-linux-arm64`
+- macOS Intel：`@openai/codex-darwin-x64`
+- macOS Apple Silicon：`@openai/codex-darwin-arm64`
+
+## 手动同步
+
+需要覆盖当前本机 Codex 初始化文件时，先检查差异，再复制：
+
+```bash
+diff -u "$HOME/.codex/AGENTS.md" codex-home/AGENTS.md
+diff -u "$HOME/.codex/RTK.md" codex-home/RTK.md
+diff -u "$HOME/.codex/path.sh" codex-home/path.sh
+
+cp codex-home/AGENTS.md "$HOME/.codex/AGENTS.md"
+cp codex-home/RTK.md "$HOME/.codex/RTK.md"
+cp codex-home/path.sh "$HOME/.codex/path.sh"
+```
+
+## 不纳入仓库
+
+- 官方自带的 `.system` skills
+- 自动安装或自动更新的 skill/plugin 目录
+- 私有项目 skills
+- Codex 会话、记忆、缓存、shell snapshots
+- 本机 `config.toml` 里的项目 trust 列表和其他本地状态
 
 ## 维护原则
 
-- 新工具按能力域放到 `scripts/` 下
-- 每个脚本都要补一段用途、示例和注意事项
-- 说明优先写在脚本索引里，README 只保留仓库级概览
+- 初始化文件以当前充分验证的 `$HOME/.codex` 内容为准
+- skill 只维护裁剪范围记录，不默认备份 skill 内容
 - 不写入任何明文密钥、令牌、密码
+- 不新增自动安装或自动更新流程，除非另有明确决定
