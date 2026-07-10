@@ -6,10 +6,11 @@
 
 - `codex-home/`：可部署到 `$HOME/.codex` 的 Agent 文件树，按当前全局配置原样镜像
 - `codex-home/path.sh`：Codex 启动 PATH 脚本
+- `codex-launcher/codex`：安装到 `$HOME/.local/bin/codex` 的完整启动 wrapper
 - `codex-home/global-rules/`：按任务类型拆分的全局规则
 - `codex-home/vendor_imports/andrej-karpathy-skills/`：全局规则链依赖的公开 vendor import，排除 `.git/`
 - `scripts/codex-agent-tree/package.sh`：生成部署包
-- `scripts/codex-agent-tree/deploy.sh`：白名单覆盖部署到目标 `.codex`
+- `scripts/codex-agent-tree/deploy.sh`：部署 `.codex` 文件树和启动 wrapper
 - `dist/codex-global-agent-tree.tar.gz`：当前已生成的部署包
 
 ## 完整部署
@@ -36,7 +37,10 @@ scripts/codex-agent-tree/deploy.sh --archive dist/codex-global-agent-tree.tar.gz
 4. 如需部署到指定目录：
 
 ```bash
-scripts/codex-agent-tree/deploy.sh --archive dist/codex-global-agent-tree.tar.gz --target /path/to/.codex
+scripts/codex-agent-tree/deploy.sh \
+  --archive dist/codex-global-agent-tree.tar.gz \
+  --target /path/to/.codex \
+  --launcher-target /path/to/.local/bin/codex
 ```
 
 ## 一句话给 Codex
@@ -47,7 +51,12 @@ scripts/codex-agent-tree/deploy.sh --archive dist/codex-global-agent-tree.tar.gz
 
 ## Codex 启动脚本
 
-`codex-home/path.sh` 会在 Codex 启动时整理 `PATH`：
+完整启动链由两个文件组成：
+
+- `codex-launcher/codex` 是实际命令入口，负责更新检查、插件和 skill 同步、订阅检查，并向真实 Codex 注入默认模型参数
+- `codex-home/path.sh` 负责整理 `PATH` 并导出 wrapper 使用的启动参数
+
+`codex-home/path.sh` 会：
 
 - 加入 `$HOME/.local/bin`
 - 加入 `$HOME/.codex/npm-global/bin`
@@ -69,9 +78,12 @@ CODEX_DEFAULT_MODEL=gpt-5.6-sol CODEX_DEFAULT_REASONING_EFFORT=high codex
 CODEX_STARTUP_HTTP_ATTEMPTS=3 CODEX_TOKEN_REFRESH_MIN_SECONDS=86400 codex
 ```
 
-部署后它会覆盖目标 `$HOME/.codex/path.sh`。如果只想更新启动脚本，可以只复制这个文件：
+部署后会同时覆盖 `$HOME/.codex/path.sh` 和 `$HOME/.local/bin/codex`。如果只想手动更新启动链：
 
 ```bash
+mkdir -p "$HOME/.local/bin"
+cp codex-launcher/codex "$HOME/.local/bin/codex"
+chmod 0755 "$HOME/.local/bin/codex"
 cp codex-home/path.sh "$HOME/.codex/path.sh"
 ```
 
@@ -87,6 +99,7 @@ cp codex-home/path.sh "$HOME/.codex/path.sh"
 - `path.sh`
 - `global-rules/`
 - `vendor_imports/andrej-karpathy-skills/`
+- `$HOME/.local/bin/codex`
 
 不会覆盖或删除：
 
@@ -101,4 +114,4 @@ cp codex-home/path.sh "$HOME/.codex/path.sh"
 
 ## macOS
 
-脚本兼容 macOS 默认工具链：`/bin/sh`、BSD `tar`、BSD `mktemp`、系统 `rsync`、`shasum`。打包和解包时使用 `COPYFILE_DISABLE=1`，避免 AppleDouble 元数据进入归档。
+打包和部署脚本兼容 macOS 默认工具链：`/bin/sh`、BSD `tar`、BSD `mktemp`、系统 `rsync`、`shasum`。启动 wrapper 使用 Bash。打包和解包时使用 `COPYFILE_DISABLE=1`，避免 AppleDouble 元数据进入归档。

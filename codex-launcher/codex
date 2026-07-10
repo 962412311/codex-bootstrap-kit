@@ -1,0 +1,1278 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_codex_home() {
+  local target_user target_home
+
+  target_user="${SUDO_USER:-$(id -un)}"
+  if [ -z "$target_user" ] || [ "$target_user" = 'root' ]; then
+    target_user="$(id -un)"
+  fi
+
+  target_home="$(getent passwd "$target_user" 2>/dev/null | awk -F: 'NR==1 { print $6 }')"
+  if [ -z "$target_home" ]; then
+    target_home="${HOME:-/root}"
+  fi
+
+  export USER="$target_user"
+  export LOGNAME="$target_user"
+  export HOME="$target_home"
+}
+
+resolve_codex_home
+
+ensure_root_home() {
+  local target_user target_home
+
+  target_user="${SUDO_USER:-$(id -un)}"
+  if [ -z "$target_user" ] || [ "$target_user" = 'root' ]; then
+    target_user="$(id -un)"
+  fi
+
+  target_home="$(getent passwd "$target_user" 2>/dev/null | awk -F: 'NR==1 { print $6 }')"
+  if [ -z "$target_home" ]; then
+    target_home="${HOME:-/root}"
+  fi
+
+  export USER="$target_user"
+  export LOGNAME="$target_user"
+  export HOME="$target_home"
+}
+
+codex_prefix="$HOME/.codex/npm-global"
+real_codex="$codex_prefix/bin/codex"
+update_stamp="$HOME/.codex/.codex-update-check.date"
+case "${CODEX_DEFAULT_MODEL:-}" in
+  ""|gpt-5.5) default_codex_model="gpt-5.6-sol" ;;
+  *) default_codex_model="$CODEX_DEFAULT_MODEL" ;;
+esac
+case "${CODEX_DEFAULT_REASONING_EFFORT:-}" in
+  ""|medium) default_codex_reasoning_effort="high" ;;
+  *) default_codex_reasoning_effort="$CODEX_DEFAULT_REASONING_EFFORT" ;;
+esac
+plugins_repo="$HOME/.codex/.tmp/plugins"
+skills_dir="$HOME/.codex/skills"
+skills_sync_root="$HOME/.codex/.tmp/skill-sync"
+DEFAULT_SKILLS_MANIFEST_URL='https://raw.githubusercontent.com/962412311/codex-skills-pack/main/skills.manifest.json'
+DEFAULT_PLUGINS_MANIFEST_URL='https://raw.githubusercontent.com/962412311/codex-skills-pack/main/plugins.manifest.json'
+
+update_plugins() {
+  if [ -d "${plugins_repo:-}/.git" ]; then
+    echo "[INFO] 正在检查插件镜像更新。"
+    before="$(git -C "${plugins_repo:-}" rev-parse --short HEAD 2>/dev/null || true)"
+    if git -C "${plugins_repo:-}" pull --ff-only --quiet >/dev/null 2>&1; then
+      after="$(git -C "${plugins_repo:-}" rev-parse --short HEAD 2>/dev/null || true)"
+      if [ -n "$before" ] && [ "$before" = "$after" ]; then
+        echo "[INFO] 插件镜像已是最新版本：${after:-unknown}。"
+      else
+        echo "[OK] 插件镜像已更新：${before:-unknown} -> ${after:-unknown}。"
+      fi
+      return 0
+    fi
+    echo '[WARN] 插件镜像更新失败，将继续启动 Codex。'
+    return 0
+  fi
+
+  echo "[WARN] 未找到插件镜像仓库：${plugins_repo:-}，跳过插件更新。"
+  return 0
+}
+
+install_skills_from_manifest() {
+  ensure_root_home
+
+  local manifest_path="$1"
+  local skills_dir="$HOME/.codex/skills"
+  local skills_sync_root="$HOME/.codex/.tmp/skill-sync"
+
+  mkdir -p "$skills_dir" "$skills_sync_root"
+  python3 - "$manifest_path" "$skills_dir" "$skills_sync_root" <<'PY'
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+skills_dir = Path(sys.argv[2])
+sync_root = Path(sys.argv[3])
+
+def info(message):
+    print(f'[INFO] {message}')
+
+def ok(message):
+    print(f'[OK] {message}')
+
+def warn(message):
+    print(f'[WARN] {message}')
+
+if not manifest_path.exists():
+    print('skills manifest 不存在，跳过技能安装。')
+    sys.exit(0)
+
+manifest_text = manifest_path.read_text().strip()
+if not manifest_text:
+    print('skills manifest 为空，跳过技能安装。')
+    sys.exit(0)
+
+try:
+    manifest = json.loads(manifest_text)
+except Exception as exc:
+    print(f'无法读取 skills manifest：{exc}')
+    sys.exit(0)
+
+skills = [
+    skill for skill in manifest.get('skills', [])
+    if skill is not None and (skill.get('enabled') is None or bool(skill.get('enabled')))
+]
+if not skills:
+    raise SystemExit('技能清单为空，跳过技能安装。')
+
+sources = {}
+resolved_skills = []
+for skill in skills:
+    name = skill.get('name')
+    source_id = skill.get('sourceId')
+    source_path = skill.get('sourcePath')
+    if not name or not source_id or not source_path:
+        warn('忽略一个缺少 name、sourceId 或 sourcePath 的 skill 条目。')
+        continue
+    if source_id not in sources:
+        source = next((item for item in manifest.get('sources', []) if item.get('id') == source_id), None)
+        if not source or not source.get('repo'):
+            warn(f"跳过 skill {name}：source '{source_id}' 缺少 repo URL。")
+            continue
+        sources[source_id] = source
+    resolved_skills.append(skill)
+
+skills = resolved_skills
+if not skills:
+    warn('没有可安装的有效 skills，跳过 skills 安装。')
+    sys.exit(0)
+
+info(f'准备安装 {len(skills)} 个 skills，来自 {len(sources)} 个源。')
+installed_count = 0
+for source_id, source in sorted(sources.items()):
+    info(f'正在同步 skills 源：{source_id}（{source["repo"]}）。')
+    checkout_dir = sync_root / source_id
+    if checkout_dir.exists():
+        shutil.rmtree(checkout_dir)
+    cmd = ['git', 'clone', '--depth', '1']
+    ref = source.get('ref')
+    if ref:
+        cmd.extend(['--branch', str(ref)])
+    cmd.extend([source['repo'], str(checkout_dir)])
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError as exc:
+        warn(f'同步 skills 源失败，已跳过：{source_id}（{exc}）。')
+        continue
+    if not checkout_dir.exists():
+        warn(f'同步 skills 源后目录不存在，已跳过：{source_id}。')
+        continue
+    ok(f'已同步 skills 源：{source_id}。')
+
+info('正在安装 skills 内容。')
+for skill in skills:
+    name = skill['name']
+    info(f'正在安装 skill：{name}。')
+    checkout_dir = sync_root / skill['sourceId']
+    source_path = skill['sourcePath']
+    dest_dir = skills_dir / name
+    source_dir = checkout_dir / source_path
+
+    if not source_dir.exists():
+        warn(f'跳过 skill {name}：缺少源文件 {skill["sourceId"]}/{source_path}。')
+        continue
+
+    if dest_dir.exists():
+        shutil.rmtree(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if source_path == '.':
+            subprocess.run(
+                ['rsync', '-a', '--delete', '--exclude=.git', f'{checkout_dir}/', f'{dest_dir}/'],
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ['rsync', '-a', '--delete', f'{source_dir}/', f'{dest_dir}/'],
+                check=True,
+            )
+    except subprocess.CalledProcessError as exc:
+        warn(f'安装 skill 失败，已跳过：{name}（{exc}）。')
+        continue
+    installed_count += 1
+    ok(f'已安装 skill：{name}。')
+
+ok(f'已刷新 {installed_count} 个 skills。')
+PY
+}
+
+install_claude_plugins_from_manifest() {
+  ensure_root_home
+
+  local manifest_path="$1"
+  local claude_root="$2"
+  local plugins_sync_root="$HOME/.codex/.tmp/plugin-sync"
+
+  mkdir -p "$plugins_sync_root" "$claude_root/plugins"
+  python3 - "$manifest_path" "$claude_root" "$plugins_sync_root" <<'PY'
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+claude_root = Path(sys.argv[2])
+sync_root = Path(sys.argv[3])
+plugins_root = claude_root / 'plugins'
+marketplaces_root = plugins_root / 'marketplaces'
+cache_root = plugins_root / 'cache'
+
+def info(message):
+    print(f'[INFO] {message}')
+
+def ok(message):
+    print(f'[OK] {message}')
+
+def warn(message):
+    print(f'[WARN] {message}')
+
+def wsl_to_windows_path(path: Path) -> str:
+    text = str(path)
+    match = re.match(r'^/mnt/([a-zA-Z])/(.*)$', text)
+    if match:
+      drive = match.group(1).upper()
+      tail = match.group(2).replace('/', '\\')
+      return f'{drive}:\\{tail}'
+    return text
+
+def run(cmd, cwd=None):
+    subprocess.run(cmd, check=True, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def run_with_retry(cmd, cwd=None, attempts=2):
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            run(cmd, cwd=cwd)
+            return
+        except subprocess.CalledProcessError as exc:
+            last_exc = exc
+            if attempt + 1 < attempts:
+                continue
+            raise last_exc
+
+def is_hex_version(version):
+    return bool(version) and re.fullmatch(r'[0-9a-fA-F]{7,40}', str(version)) is not None
+
+def clone_repo(repo, dest, version=None, commit=None):
+    if dest.exists() and (dest / '.git').exists():
+        try:
+            run(['git', '-C', str(dest), 'pull', '--ff-only', '--quiet'])
+            return
+        except subprocess.CalledProcessError as exc:
+            warn(f'更新现有仓库失败，准备重建：{dest}（{exc}）')
+            shutil.rmtree(dest)
+    elif dest.exists():
+        shutil.rmtree(dest)
+
+    version_text = str(version or '')
+    commit_text = str(commit or '')
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    cloned = False
+    ref_candidates = []
+    if version_text and version_text != 'unknown' and not is_hex_version(version_text):
+        ref_candidates.append(version_text)
+        if version_text.startswith('v'):
+            stripped_version = version_text[1:]
+            if stripped_version and stripped_version not in ref_candidates:
+                ref_candidates.append(stripped_version)
+        else:
+            prefixed_version = f'v{version_text}'
+            if prefixed_version not in ref_candidates:
+                ref_candidates.append(prefixed_version)
+
+    for ref in ref_candidates:
+        cmd = ['git', 'clone', '--depth', '1', '--branch', ref, '--single-branch', repo, str(dest)]
+        try:
+            run_with_retry(cmd)
+            cloned = True
+            break
+        except subprocess.CalledProcessError:
+            if dest.exists():
+                shutil.rmtree(dest)
+
+    if not cloned:
+        cmd = ['git', 'clone', '--depth', '1', repo, str(dest)]
+        try:
+            run_with_retry(cmd)
+            cloned = True
+        except subprocess.CalledProcessError as exc:
+            warn(f'克隆仓库失败：{repo} -> {dest}（{exc}）')
+            return False
+
+    if commit_text and is_hex_version(commit_text):
+        try:
+            run(['git', '-C', str(dest), 'checkout', '--quiet', commit_text])
+        except subprocess.CalledProcessError as exc:
+            warn(f'检出指定提交失败：{dest} @ {commit_text}（{exc}）')
+    return True
+
+def home_path(relative_path):
+    text = str(relative_path).strip()
+    if text.startswith('~'):
+        text = text[1:]
+    text = text.lstrip('/\\')
+    return Path.home() / text
+
+def remove_path(path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    if path.exists():
+        shutil.rmtree(path)
+
+def ensure_symlink(source, target, is_dir=False):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        remove_path(target)
+    os.symlink(source, target, target_is_directory=is_dir)
+
+def copy_tree(source, destination):
+    if destination.exists():
+        remove_path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not source.exists():
+        raise FileNotFoundError(source)
+    if source.is_dir():
+        shutil.copytree(source, destination, symlinks=True, ignore=shutil.ignore_patterns('.git'))
+    else:
+        shutil.copy2(source, destination)
+
+if not manifest_path.exists():
+    print('plugins manifest 不存在，跳过插件恢复。')
+    sys.exit(0)
+
+manifest_text = manifest_path.read_text().strip()
+if not manifest_text:
+    print('plugins manifest 为空，跳过插件恢复。')
+    sys.exit(0)
+
+try:
+    manifest = json.loads(manifest_text)
+except Exception as exc:
+    print(f'无法读取 plugins manifest：{exc}')
+    sys.exit(0)
+
+marketplaces = manifest.get('marketplaces', [])
+plugins = manifest.get('plugins', [])
+if not marketplaces or not plugins:
+    warn('plugins manifest 中没有可恢复的 marketplace 或 plugin。')
+    sys.exit(0)
+
+now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+marketplace_state = {}
+for marketplace in marketplaces:
+    marketplace_id = marketplace.get('id')
+    repo = marketplace.get('repo')
+    if not marketplace_id or not repo:
+        warn('忽略一个缺少 id 或 repo 的 marketplace 条目。')
+        continue
+
+    dest_dir = marketplaces_root / marketplace_id
+    clone_repo(repo, dest_dir, marketplace.get('version'))
+    marketplace_state[marketplace_id] = {
+        'source': {
+            'source': marketplace.get('source', 'github'),
+            'repo': repo,
+        },
+        'installLocation': wsl_to_windows_path(dest_dir),
+        'lastUpdated': marketplace.get('lastUpdated', now_iso),
+    }
+    ok(f'已同步 marketplace：{marketplace_id}。')
+
+installed_plugins = {}
+for plugin in plugins:
+    plugin_id = plugin.get('pluginId')
+    marketplace_id = plugin.get('marketplaceId')
+    source_repo = plugin.get('sourceRepo')
+    install_path = plugin.get('installPath')
+    version = plugin.get('version')
+    restore = plugin.get('restore') or {}
+    restore_kind = restore.get('kind', 'marketplace-plugin')
+    if not plugin_id or not marketplace_id or not source_repo:
+        warn('忽略一个缺少 pluginId、marketplaceId 或 sourceRepo 的 plugin 条目。')
+        continue
+
+    plugin_name = plugin_id.split('@', 1)[0]
+    if restore_kind == 'codex-skill-package':
+        install_root = home_path(restore.get('installRoot') or f'.codex/{plugin_name}')
+        clone_repo(source_repo, install_root, version, plugin.get('gitCommitSha'))
+
+        for link in restore.get('links', []):
+            source_rel = link.get('source')
+            target_rel = link.get('target')
+            if not source_rel or not target_rel:
+                warn(f'忽略一个缺少 source 或 target 的链接：{plugin_id}。')
+                continue
+            source_path = install_root / source_rel
+            target_path = home_path(target_rel)
+            if not source_path.exists():
+                warn(f'跳过链接，源路径不存在：{source_path}。')
+                continue
+            ensure_symlink(source_path, target_path, link.get('type') == 'dir')
+
+        installed_plugins.setdefault(plugin_id, []).append({
+            'scope': 'user',
+            'installPath': str(install_root),
+            'version': version,
+            'installedAt': plugin.get('installedAt', now_iso),
+            'lastUpdated': plugin.get('lastUpdated', now_iso),
+            **({'gitCommitSha': plugin['gitCommitSha']} if plugin.get('gitCommitSha') else {}),
+        })
+        ok(f'已恢复本地 plugin 包：{plugin_name}。')
+        continue
+
+    source_path = restore.get('sourcePath', '.')
+    if not install_path:
+        warn(f'忽略一个缺少 installPath 的 marketplace plugin 条目：{plugin_id}。')
+        continue
+
+    checkout_dir = sync_root / marketplace_id / plugin_name
+    if checkout_dir.exists():
+        shutil.rmtree(checkout_dir)
+    clone_repo(source_repo, checkout_dir, version, plugin.get('gitCommitSha'))
+
+    cache_dir = claude_root / install_path
+    source_dir = checkout_dir / source_path
+    if not source_dir.exists():
+        warn(f'跳过 plugin {plugin_name}：缺少源文件 {source_path}。')
+        continue
+
+    if source_dir.resolve() == checkout_dir.resolve():
+        copy_tree(checkout_dir, cache_dir)
+    else:
+        copy_tree(source_dir, cache_dir)
+
+    installed_plugins.setdefault(plugin_id, []).append({
+        'scope': 'user',
+        'installPath': wsl_to_windows_path(cache_dir),
+        'version': version,
+        'installedAt': plugin.get('installedAt', now_iso),
+        'lastUpdated': plugin.get('lastUpdated', now_iso),
+        **({'gitCommitSha': plugin['gitCommitSha']} if plugin.get('gitCommitSha') else {}),
+    })
+    ok(f'已同步 plugin：{plugin_name}。')
+
+installed_plugins_path = plugins_root / 'installed_plugins.json'
+known_marketplaces_path = plugins_root / 'known_marketplaces.json'
+
+installed_plugins_path.write_text(json.dumps({'version': 2, 'plugins': installed_plugins}, indent=2, ensure_ascii=False) + '\n')
+known_marketplaces_path.write_text(json.dumps(marketplace_state, indent=2, ensure_ascii=False) + '\n')
+
+ok(f'已重建 Claude 插件状态：{len(installed_plugins)} 个 plugins，{len(marketplace_state)} 个 marketplaces。')
+PY
+}
+
+install_claude_plugins_from_manifest() {
+  ensure_root_home
+
+  local manifest_path="$1"
+  local claude_root="$2"
+  local plugins_sync_root="$HOME/.codex/.tmp/plugin-sync"
+
+  mkdir -p "$plugins_sync_root" "$claude_root/plugins"
+  python3 - "$manifest_path" "$claude_root" "$plugins_sync_root" <<'PY'
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+claude_root = Path(sys.argv[2])
+sync_root = Path(sys.argv[3])
+plugins_root = claude_root / 'plugins'
+marketplaces_root = plugins_root / 'marketplaces'
+cache_root = plugins_root / 'cache'
+
+def info(message):
+    print(f'[INFO] {message}')
+
+def ok(message):
+    print(f'[OK] {message}')
+
+def warn(message):
+    print(f'[WARN] {message}')
+
+def wsl_to_windows_path(path: Path) -> str:
+    text = str(path)
+    match = re.match(r'^/mnt/([a-zA-Z])/(.*)$', text)
+    if match:
+      drive = match.group(1).upper()
+      tail = match.group(2).replace('/', '\\')
+      return f'{drive}:\\{tail}'
+    return text
+
+def run(cmd, cwd=None):
+    subprocess.run(cmd, check=True, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def run_with_retry(cmd, cwd=None, attempts=2):
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            run(cmd, cwd=cwd)
+            return
+        except subprocess.CalledProcessError as exc:
+            last_exc = exc
+            if attempt + 1 < attempts:
+                continue
+            raise last_exc
+
+def is_hex_version(version):
+    return bool(version) and re.fullmatch(r'[0-9a-fA-F]{7,40}', str(version)) is not None
+
+def clone_repo(repo, dest, version=None, commit=None):
+    if dest.exists() and (dest / '.git').exists():
+        try:
+            run(['git', '-C', str(dest), 'pull', '--ff-only', '--quiet'])
+            return
+        except subprocess.CalledProcessError as exc:
+            warn(f'更新现有仓库失败，准备重建：{dest}（{exc}）')
+            shutil.rmtree(dest)
+    elif dest.exists():
+        shutil.rmtree(dest)
+
+    version_text = str(version or '')
+    commit_text = str(commit or '')
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    cloned = False
+    ref_candidates = []
+    if version_text and version_text != 'unknown' and not is_hex_version(version_text):
+        ref_candidates.append(version_text)
+        if version_text.startswith('v'):
+            stripped_version = version_text[1:]
+            if stripped_version and stripped_version not in ref_candidates:
+                ref_candidates.append(stripped_version)
+        else:
+            prefixed_version = f'v{version_text}'
+            if prefixed_version not in ref_candidates:
+                ref_candidates.append(prefixed_version)
+
+    for ref in ref_candidates:
+        cmd = ['git', 'clone', '--depth', '1', '--branch', ref, '--single-branch', repo, str(dest)]
+        try:
+            run_with_retry(cmd)
+            cloned = True
+            break
+        except subprocess.CalledProcessError:
+            if dest.exists():
+                shutil.rmtree(dest)
+
+    if not cloned:
+        cmd = ['git', 'clone', '--depth', '1', repo, str(dest)]
+        try:
+            run_with_retry(cmd)
+            cloned = True
+        except subprocess.CalledProcessError as exc:
+            warn(f'克隆仓库失败：{repo} -> {dest}（{exc}）')
+            return False
+
+    if commit_text and is_hex_version(commit_text):
+        try:
+            run(['git', '-C', str(dest), 'checkout', '--quiet', commit_text])
+        except subprocess.CalledProcessError as exc:
+            warn(f'检出指定提交失败：{dest} @ {commit_text}（{exc}）')
+    return True
+
+def home_path(relative_path):
+    text = str(relative_path).strip()
+    if text.startswith('~'):
+        text = text[1:]
+    text = text.lstrip('/\\')
+    return Path.home() / text
+
+def remove_path(path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    if path.exists():
+        shutil.rmtree(path)
+
+def ensure_symlink(source, target, is_dir=False):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        remove_path(target)
+    os.symlink(source, target, target_is_directory=is_dir)
+
+def copy_tree(source, destination):
+    if destination.exists():
+        remove_path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not source.exists():
+        raise FileNotFoundError(source)
+    if source.is_dir():
+        shutil.copytree(source, destination, symlinks=True, ignore=shutil.ignore_patterns('.git'))
+    else:
+        shutil.copy2(source, destination)
+
+if not manifest_path.exists():
+    print('plugins manifest 不存在，跳过插件恢复。')
+    sys.exit(0)
+
+manifest_text = manifest_path.read_text().strip()
+if not manifest_text:
+    print('plugins manifest 为空，跳过插件恢复。')
+    sys.exit(0)
+
+try:
+    manifest = json.loads(manifest_text)
+except Exception as exc:
+    print(f'无法读取 plugins manifest：{exc}')
+    sys.exit(0)
+
+marketplaces = manifest.get('marketplaces', [])
+plugins = manifest.get('plugins', [])
+if not marketplaces or not plugins:
+    warn('plugins manifest 中没有可恢复的 marketplace 或 plugin。')
+    sys.exit(0)
+
+now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+marketplace_state = {}
+for marketplace in marketplaces:
+    marketplace_id = marketplace.get('id')
+    repo = marketplace.get('repo')
+    if not marketplace_id or not repo:
+        warn('忽略一个缺少 id 或 repo 的 marketplace 条目。')
+        continue
+
+    dest_dir = marketplaces_root / marketplace_id
+    clone_repo(repo, dest_dir, marketplace.get('version'))
+    marketplace_state[marketplace_id] = {
+        'source': {
+            'source': marketplace.get('source', 'github'),
+            'repo': repo,
+        },
+        'installLocation': wsl_to_windows_path(dest_dir),
+        'lastUpdated': marketplace.get('lastUpdated', now_iso),
+    }
+    ok(f'已同步 marketplace：{marketplace_id}。')
+
+installed_plugins = {}
+for plugin in plugins:
+    plugin_id = plugin.get('pluginId')
+    marketplace_id = plugin.get('marketplaceId')
+    source_repo = plugin.get('sourceRepo')
+    install_path = plugin.get('installPath')
+    version = plugin.get('version')
+    restore = plugin.get('restore') or {}
+    restore_kind = restore.get('kind', 'marketplace-plugin')
+    if not plugin_id or not marketplace_id or not source_repo:
+        warn('忽略一个缺少 pluginId、marketplaceId 或 sourceRepo 的 plugin 条目。')
+        continue
+
+    plugin_name = plugin_id.split('@', 1)[0]
+    if restore_kind == 'codex-skill-package':
+        install_root = home_path(restore.get('installRoot') or f'.codex/{plugin_name}')
+        clone_repo(source_repo, install_root, version, plugin.get('gitCommitSha'))
+
+        for link in restore.get('links', []):
+            source_rel = link.get('source')
+            target_rel = link.get('target')
+            if not source_rel or not target_rel:
+                warn(f'忽略一个缺少 source 或 target 的链接：{plugin_id}。')
+                continue
+            source_path = install_root / source_rel
+            target_path = home_path(target_rel)
+            if not source_path.exists():
+                warn(f'跳过链接，源路径不存在：{source_path}。')
+                continue
+            ensure_symlink(source_path, target_path, link.get('type') == 'dir')
+
+        installed_plugins.setdefault(plugin_id, []).append({
+            'scope': 'user',
+            'installPath': str(install_root),
+            'version': version,
+            'installedAt': plugin.get('installedAt', now_iso),
+            'lastUpdated': plugin.get('lastUpdated', now_iso),
+            **({'gitCommitSha': plugin['gitCommitSha']} if plugin.get('gitCommitSha') else {}),
+        })
+        ok(f'已恢复本地 plugin 包：{plugin_name}。')
+        continue
+
+    source_path = restore.get('sourcePath', '.')
+    if not install_path:
+        warn(f'忽略一个缺少 installPath 的 marketplace plugin 条目：{plugin_id}。')
+        continue
+
+    checkout_dir = sync_root / marketplace_id / plugin_name
+    if checkout_dir.exists():
+        shutil.rmtree(checkout_dir)
+    clone_repo(source_repo, checkout_dir, version, plugin.get('gitCommitSha'))
+
+    cache_dir = claude_root / install_path
+    source_dir = checkout_dir / source_path
+    if not source_dir.exists():
+        warn(f'跳过 plugin {plugin_name}：缺少源文件 {source_path}。')
+        continue
+
+    if source_dir.resolve() == checkout_dir.resolve():
+        copy_tree(checkout_dir, cache_dir)
+    else:
+        copy_tree(source_dir, cache_dir)
+
+    installed_plugins.setdefault(plugin_id, []).append({
+        'scope': 'user',
+        'installPath': wsl_to_windows_path(cache_dir),
+        'version': version,
+        'installedAt': plugin.get('installedAt', now_iso),
+        'lastUpdated': plugin.get('lastUpdated', now_iso),
+        **({'gitCommitSha': plugin['gitCommitSha']} if plugin.get('gitCommitSha') else {}),
+    })
+    ok(f'已同步 plugin：{plugin_name}。')
+
+installed_plugins_path = plugins_root / 'installed_plugins.json'
+known_marketplaces_path = plugins_root / 'known_marketplaces.json'
+
+installed_plugins_path.write_text(json.dumps({'version': 2, 'plugins': installed_plugins}, indent=2, ensure_ascii=False) + '\n')
+known_marketplaces_path.write_text(json.dumps(marketplace_state, indent=2, ensure_ascii=False) + '\n')
+
+ok(f'已重建 Claude 插件状态：{len(installed_plugins)} 个 plugins，{len(marketplace_state)} 个 marketplaces。')
+PY
+}
+
+update_skills() {
+  echo "[INFO] 正在检查 skills 更新。"
+  local temp_manifest
+  temp_manifest="$(mktemp)"
+  if curl -fsSL "$DEFAULT_SKILLS_MANIFEST_URL" -o "$temp_manifest"; then
+    if [ -s "$temp_manifest" ] && grep -q '^{' "$temp_manifest"; then
+      install_skills_from_manifest "$temp_manifest"
+    else
+      echo "[WARN] 下载到的 skills manifest 无效：$DEFAULT_SKILLS_MANIFEST_URL，跳过 skills 更新。"
+    fi
+  else
+    echo "[WARN] 未能下载 skills manifest：$DEFAULT_SKILLS_MANIFEST_URL，跳过 skills 更新。"
+  fi
+  rm -f "$temp_manifest"
+  return 0
+}
+
+check_subscription() {
+  python3 - <<'PY'
+import base64
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+auth_path = Path.home() / '.codex' / 'auth.json'
+accounts_url = 'https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27'
+oauth_url = 'https://auth.openai.com/oauth/token'
+
+def env_int(name, default):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+startup_http_attempts = env_int('CODEX_STARTUP_HTTP_ATTEMPTS', 3)
+token_refresh_min_seconds = env_int('CODEX_TOKEN_REFRESH_MIN_SECONDS', 86400)
+
+def warn(message):
+    print(f'[WARN] {message}')
+
+def info(message):
+    print(f'[INFO] {message}')
+
+def urlopen_json(request, timeout=20, attempts=startup_http_attempts):
+    last_exc = None
+    for _ in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
+
+def decode_jwt(token):
+    parts = token.split('.')
+    if len(parts) < 2:
+        return {}
+    payload = parts[1] + '=' * (-len(parts[1]) % 4)
+    return json.loads(base64.urlsafe_b64decode(payload.encode('ascii')))
+
+def token_payload(tokens, token_name):
+    token = tokens.get(token_name)
+    if not isinstance(token, str) or not token.strip():
+        return {}
+    try:
+        return decode_jwt(token)
+    except Exception:
+        return {}
+
+def extract_client_id(tokens):
+    for token_name in ('id_token', 'access_token'):
+        payload = token_payload(tokens, token_name)
+        aud = payload.get('aud')
+        if isinstance(aud, list) and aud:
+            return str(aud[0])
+        if isinstance(aud, str) and aud:
+            return aud
+    return None
+
+def token_seconds_until_expiry(tokens, token_name):
+    payload = token_payload(tokens, token_name)
+    exp = payload.get('exp')
+    if not isinstance(exp, (int, float)):
+        return None
+    return exp - datetime.now(timezone.utc).timestamp()
+
+def should_refresh_tokens(tokens):
+    access_token = tokens.get('access_token')
+    if not isinstance(access_token, str) or not access_token.strip():
+        return True
+    seconds_left = token_seconds_until_expiry(tokens, 'access_token')
+    if seconds_left is None:
+        return True
+    return seconds_left <= token_refresh_min_seconds
+
+def save_auth(auth):
+    tmp_path = auth_path.with_suffix('.json.tmp')
+    tmp_path.write_text(json.dumps(auth, ensure_ascii=False, indent=2) + '\n')
+    try:
+        tmp_path.chmod(auth_path.stat().st_mode & 0o777)
+    except Exception:
+        pass
+    tmp_path.replace(auth_path)
+
+def refresh_tokens(auth, tokens):
+    refresh_token = tokens.get('refresh_token')
+    client_id = extract_client_id(tokens)
+    if not isinstance(refresh_token, str) or not refresh_token.strip() or not client_id:
+        return tokens
+
+    body = urllib.parse.urlencode({
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token,
+        'client_id': client_id,
+    }).encode()
+    request = urllib.request.Request(
+        oauth_url,
+        data=body,
+        headers={'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
+        method='POST',
+    )
+    try:
+        refreshed = urlopen_json(request)
+    except Exception as exc:
+        warn(f'刷新 Codex 登录 token 失败，将使用本地缓存：{exc}')
+        return tokens
+
+    updated = dict(tokens)
+    for key in ('id_token', 'access_token', 'refresh_token'):
+        value = refreshed.get(key)
+        if isinstance(value, str) and value.strip():
+            updated[key] = value
+    auth['tokens'] = updated
+    auth['last_refresh'] = datetime.now(timezone.utc).isoformat()
+    try:
+        save_auth(auth)
+    except Exception as exc:
+        warn(f'保存刷新后的 Codex 登录信息失败，将继续检查：{exc}')
+    return updated
+
+def nested_auth(payload):
+    nested = payload.get('https://api.openai.com/auth')
+    return nested if isinstance(nested, dict) else {}
+
+def extract_account_id(tokens):
+    account_id = tokens.get('account_id')
+    if isinstance(account_id, str) and account_id.strip():
+        return account_id.strip()
+    for token_name in ('id_token', 'access_token'):
+        account_id = nested_auth(token_payload(tokens, token_name)).get('chatgpt_account_id')
+        if isinstance(account_id, str) and account_id.strip():
+            return account_id.strip()
+    return None
+
+def subscription_from_accounts(tokens):
+    access_token = tokens.get('access_token')
+    if not isinstance(access_token, str) or not access_token.strip():
+        return None
+
+    account_id = extract_account_id(tokens)
+    headers = {
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {access_token}',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    }
+    if account_id:
+        headers['ChatGPT-Account-ID'] = account_id
+        headers['OpenAI-Account-ID'] = account_id
+
+    request = urllib.request.Request(accounts_url, headers=headers)
+    try:
+        payload = urlopen_json(request)
+    except urllib.error.HTTPError as exc:
+        warn(f'查询 Codex 账号订阅失败，将使用本地 token：{exc}')
+        return None
+    except Exception as exc:
+        warn(f'查询 Codex 账号订阅失败，将使用本地 token：{exc}')
+        return None
+
+    accounts = payload.get('accounts')
+    if not isinstance(accounts, dict):
+        return None
+
+    account = None
+    if account_id and isinstance(accounts.get(account_id), dict):
+        account = accounts[account_id]
+    elif isinstance(accounts.get('default'), dict):
+        account = accounts['default']
+    else:
+        for candidate in accounts.values():
+            entitlement = candidate.get('entitlement') if isinstance(candidate, dict) else None
+            if isinstance(entitlement, dict) and entitlement.get('has_active_subscription') is True:
+                account = candidate
+                break
+
+    entitlement = account.get('entitlement') if isinstance(account, dict) else None
+    if not isinstance(entitlement, dict):
+        return None
+
+    for key in ('renews_at', 'expires_at', 'cancels_at'):
+        value = entitlement.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+def subscription_from_tokens(tokens):
+    for token_name in ('id_token', 'access_token'):
+        subscription_until = nested_auth(token_payload(tokens, token_name)).get(
+            'chatgpt_subscription_active_until'
+        )
+        if isinstance(subscription_until, str) and subscription_until.strip():
+            return subscription_until.strip()
+    return None
+
+def subscription_metadata_from_tokens(tokens):
+    for token_name in ('id_token', 'access_token'):
+        auth = nested_auth(token_payload(tokens, token_name))
+        subscription_until = auth.get('chatgpt_subscription_active_until')
+        subscription_start = auth.get('chatgpt_subscription_active_start')
+        if isinstance(subscription_until, str) and subscription_until.strip():
+            return {
+                'start': subscription_start.strip() if isinstance(subscription_start, str) else '',
+                'until': subscription_until.strip(),
+            }
+    return {}
+
+def add_months(value, months):
+    month = value.month - 1 + months
+    year = value.year + month // 12
+    month = month % 12 + 1
+    days_in_month = (
+        31,
+        29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    )
+    day = min(value.day, days_in_month[month - 1])
+    return value.replace(year=year, month=month, day=day)
+
+def parse_time(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+def current_subscription_until_from_tokens(tokens):
+    metadata = subscription_metadata_from_tokens(tokens)
+    subscription_until = metadata.get('until')
+    expiry = parse_time(subscription_until)
+    if not expiry:
+        return subscription_until
+
+    now = datetime.now(timezone.utc)
+    if expiry > now:
+        return subscription_until
+
+    start = parse_time(metadata.get('start'))
+    if not start or start >= expiry:
+        return subscription_until
+
+    months = (expiry.year - start.year) * 12 + expiry.month - start.month
+    if months <= 0:
+        return subscription_until
+
+    projected = expiry
+    while projected <= now:
+        projected = add_months(projected, months)
+    return projected.isoformat()
+
+if not auth_path.exists():
+    warn('未找到 Codex 登录信息，跳过订阅检查。')
+    sys.exit(0)
+
+try:
+    auth_text = auth_path.read_text().strip()
+    if not auth_text:
+        raise ValueError('auth.json is empty')
+    auth = json.loads(auth_text)
+except Exception as exc:
+    warn(f'无法读取 Codex 登录信息：{exc}')
+    sys.exit(0)
+
+if auth.get('auth_mode') != 'chatgpt':
+    info('当前不是 ChatGPT 登录，跳过订阅检查。')
+    sys.exit(0)
+
+tokens = auth.get('tokens') or {}
+if should_refresh_tokens(tokens):
+    tokens = refresh_tokens(auth, tokens)
+subscription_until = subscription_from_accounts(tokens) or current_subscription_until_from_tokens(tokens)
+
+if not subscription_until:
+    warn('未找到订阅到期时间，跳过检查。')
+    sys.exit(0)
+
+normalized_until = subscription_until.replace('Z', '+00:00')
+try:
+    expiry = datetime.fromisoformat(normalized_until)
+except ValueError:
+    warn(f'无法解析订阅到期时间：{subscription_until}')
+    sys.exit(0)
+
+now = datetime.now(timezone.utc)
+remaining = expiry - now
+remaining_days = remaining.total_seconds() / 86400
+expiry_text = expiry.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+if remaining.total_seconds() <= 0:
+    warn(f'Codex 订阅已过期，到期时间：{expiry_text}。')
+    sys.exit(0)
+
+if remaining_days <= 7:
+    warn(f'Codex 订阅还剩 {remaining_days:.1f} 天，到期时间：{expiry_text}。')
+    sys.exit(0)
+
+info(f'Codex 订阅还剩 {remaining_days:.1f} 天，到期时间：{expiry_text}。')
+PY
+}
+
+touch_update_stamp() {
+  mkdir -p "$HOME/.codex"
+  date +%F > "$update_stamp"
+}
+
+should_check_update() {
+  local today current
+  today="$(date +%F)"
+  current="$(cat "$update_stamp" 2>/dev/null || true)"
+  if [ "$current" = "$today" ]; then
+    echo '[INFO] 今天已检查过 Codex 更新检查，跳过。'
+    return 1
+  fi
+  return 0
+}
+
+update_codex() {
+  if ! command -v npm >/dev/null 2>&1; then
+    echo '[WARN] 未找到 npm，跳过 Codex 更新。'
+    touch_update_stamp
+    return 0
+  fi
+
+  if ! should_check_update; then
+    return 0
+  fi
+
+  if [ ! -x "$real_codex" ]; then
+    echo '[INFO] 未检测到已安装的 Codex，开始安装最新版本。'
+    mkdir -p "$codex_prefix"
+    if npm i -g --prefix "$codex_prefix" @openai/codex@latest --silent --no-fund --no-audit >/dev/null 2>&1; then
+      echo '[OK] Codex 已安装。'
+    else
+      echo '[WARN] Codex 安装失败，将继续使用当前版本。'
+    fi
+    touch_update_stamp
+    return 0
+  fi
+
+  current_version="$($real_codex --version 2>/dev/null | awk '{print $NF}' || true)"
+  current_version="${current_version:-}"
+  latest_version="$(npm view @openai/codex version --silent 2>/dev/null || true)"
+  latest_version="${latest_version:-}"
+
+  if [ -z "${latest_version:-}" ]; then
+    echo '[WARN] 无法获取 Codex 最新版本，跳过自动更新。'
+    touch_update_stamp
+    return 0
+  fi
+
+  if [ "${current_version:-}" = "${latest_version:-}" ]; then
+    echo "[INFO] Codex 已是最新版本：${current_version:-}。"
+    touch_update_stamp
+    return 0
+  fi
+
+  echo "[INFO] 检测到 Codex 新版本：${current_version:-} -> ${latest_version:-}，开始更新。"
+  mkdir -p "$codex_prefix"
+  if npm i -g --prefix "$codex_prefix" @openai/codex@latest --silent --no-fund --no-audit >/dev/null 2>&1; then
+    echo "[OK] Codex 已更新到最新版本：${latest_version:-}。"
+  else
+    echo '[WARN] Codex 更新失败，将继续使用当前版本。'
+  fi
+  touch_update_stamp
+}
+
+sync_update_artifacts() {
+  update_codex
+}
+
+blackhole_statusline_js="/mnt/i/QtWorkData/MyTools/my_ghostty_blackhole/blackhole-windows-terminal/blackhole-statusline.js"
+blackhole_beacon_pid=""
+
+is_blackhole_tui_invocation() {
+  local first="${1:-}"
+  case "$first" in
+    exec|e|review|login|logout|mcp|plugin|mcp-server|app-server|remote-control|completion|update|doctor|sandbox|debug|apply|a|archive|delete|unarchive|fork|cloud|exec-server|features|help)
+      return 1
+      ;;
+    -h|--help|-V|--version)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+start_blackhole_beacon() {
+  if [ -n "${CODEX_BLACKHOLE_DISABLE:-}" ]; then
+    return 1
+  fi
+  if [ ! -t 1 ]; then
+    return 1
+  fi
+  if ! is_blackhole_tui_invocation "$@"; then
+    return 1
+  fi
+  if ! command -v node >/dev/null 2>&1 || [ ! -f "$blackhole_statusline_js" ]; then
+    return 1
+  fi
+
+  node "$blackhole_statusline_js" codex-beacon >/dev/null 2>&1 &
+  blackhole_beacon_pid="$!"
+}
+
+should_apply_codex_defaults() {
+  local first="${1:-}"
+  case "$first" in
+    login|logout|mcp|plugin|mcp-server|app-server|remote-control|completion|update|doctor|sandbox|debug|apply|a|archive|delete|unarchive|cloud|exec-server|features|help)
+      return 1
+      ;;
+    -h|--help|-V|--version)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+run_real_codex() {
+  local has_model=0
+  local has_reasoning_effort=0
+  local arg prev=""
+  local defaults=()
+
+  if should_apply_codex_defaults "$@"; then
+    for arg in "$@"; do
+      if [ "$prev" = "-m" ] || [ "$prev" = "--model" ]; then
+        has_model=1
+      elif [ "$prev" = "-c" ] || [ "$prev" = "--config" ]; then
+        case "$arg" in
+          model=*|model_reasoning_effort=*)
+            [ "${arg%%=*}" = "model" ] && has_model=1
+            [ "${arg%%=*}" = "model_reasoning_effort" ] && has_reasoning_effort=1
+            ;;
+        esac
+      fi
+
+      case "$arg" in
+        -m|--model|-c|--config)
+          prev="$arg"
+          continue
+          ;;
+        --model=*|model=*)
+          has_model=1
+          ;;
+        --config=model=*|--config=model_reasoning_effort=*)
+          case "${arg#--config=}" in
+            model=*) has_model=1 ;;
+            model_reasoning_effort=*) has_reasoning_effort=1 ;;
+          esac
+          ;;
+        model_reasoning_effort=*)
+          has_reasoning_effort=1
+          ;;
+      esac
+      prev=""
+    done
+
+    if [ "$has_model" -eq 0 ]; then
+      defaults+=("-m" "$default_codex_model")
+    fi
+    if [ "$has_reasoning_effort" -eq 0 ]; then
+      defaults+=("-c" "model_reasoning_effort=\"$default_codex_reasoning_effort\"")
+    fi
+  fi
+
+  "$real_codex" "${defaults[@]}" "$@"
+}
+
+run_codex() {
+  local status
+  start_blackhole_beacon "$@" || true
+  if [ -n "${blackhole_beacon_pid:-}" ]; then
+    set +e
+    run_real_codex "$@"
+    status=$?
+    kill "$blackhole_beacon_pid" >/dev/null 2>&1 || true
+    wait "$blackhole_beacon_pid" >/dev/null 2>&1 || true
+    exit "$status"
+  fi
+
+  run_real_codex "$@"
+}
+
+check_subscription
+sync_update_artifacts
+if [ -x "$real_codex" ]; then
+  :
+elif [ -x "/usr/local/bin/codex" ]; then
+  real_codex="/usr/local/bin/codex"
+fi
+
+run_codex "$@"

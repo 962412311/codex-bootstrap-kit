@@ -5,6 +5,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 target_dir="$HOME/.codex"
 source_dir="$repo_root/codex-home"
+launcher_source="$repo_root/codex-launcher/codex"
+launcher_target="$HOME/.local/bin/codex"
 archive=""
 tmp_dir=""
 
@@ -24,12 +26,12 @@ make_tmp_dir() {
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/codex-agent-tree/deploy.sh [--target PATH]
-  scripts/codex-agent-tree/deploy.sh --archive PATH [--target PATH]
+  scripts/codex-agent-tree/deploy.sh [--target PATH] [--launcher-target PATH]
+  scripts/codex-agent-tree/deploy.sh --archive PATH [--target PATH] [--launcher-target PATH]
 
-Deploys the archived global Codex Agent file tree into a .codex directory.
-Only the archived Agent tree is overwritten; auth, sessions, memories, cache,
-state databases, and other runtime files are not removed.
+Deploys the global Codex Agent file tree and Codex launcher wrapper.
+Auth, sessions, memories, cache, state databases, and other runtime files are
+not removed.
 USAGE
 }
 
@@ -40,7 +42,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-for command_name in cp mktemp rsync tar; do
+for command_name in chmod cp dirname mkdir mktemp rsync tar; do
   require_command "$command_name"
 done
 
@@ -49,6 +51,11 @@ while [ "$#" -gt 0 ]; do
     --target)
       [ "$#" -ge 2 ] || { printf 'ERROR: --target requires a path\n' >&2; exit 1; }
       target_dir="$2"
+      shift 2
+      ;;
+    --launcher-target)
+      [ "$#" -ge 2 ] || { printf 'ERROR: --launcher-target requires a path\n' >&2; exit 1; }
+      launcher_target="$2"
       shift 2
       ;;
     --archive)
@@ -73,6 +80,7 @@ if [ -n "$archive" ]; then
   tmp_dir=$(make_tmp_dir)
   COPYFILE_DISABLE=1 tar -xzf "$archive" -C "$tmp_dir"
   source_dir="$tmp_dir"
+  launcher_source="$tmp_dir/codex-launcher/codex"
 fi
 
 for required in AGENTS.md BOOTSTRAP.md GLOBAL-AGENT.md KARPATHY-INTEGRATION.md RTK.md path.sh global-rules vendor_imports/andrej-karpathy-skills; do
@@ -81,6 +89,13 @@ for required in AGENTS.md BOOTSTRAP.md GLOBAL-AGENT.md KARPATHY-INTEGRATION.md R
     exit 1
   fi
 done
+if [ ! -f "$launcher_source" ]; then
+  printf 'ERROR: missing archived path: codex-launcher/codex\n' >&2
+  exit 1
+fi
+if command -v bash >/dev/null 2>&1; then
+  bash -n "$launcher_source"
+fi
 
 mkdir -p "$target_dir"
 
@@ -102,4 +117,10 @@ if command -v zsh >/dev/null 2>&1; then
   zsh -n "$target_dir/path.sh"
 fi
 
+launcher_dir=$(dirname "$launcher_target")
+mkdir -p "$launcher_dir"
+cp "$launcher_source" "$launcher_target"
+chmod 0755 "$launcher_target"
+
 printf 'deployed=%s\n' "$target_dir"
+printf 'launcher=%s\n' "$launcher_target"
