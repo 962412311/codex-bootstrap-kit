@@ -18,8 +18,8 @@
 1. 克隆仓库：
 
 ```bash
-git clone https://github.com/962412311/my-tools.git
-cd my-tools
+git clone https://github.com/962412311/codex-bootstrap-kit.git
+cd codex-bootstrap-kit
 ```
 
 2. 生成部署包：
@@ -46,7 +46,7 @@ scripts/codex-agent-tree/deploy.sh \
 ## 一句话给 Codex
 
 ```text
-请基于 https://github.com/962412311/my-tools.git，严格按照该 git 仓库的 README 完整部署 Codex 启动脚本和全局 Agent 结构树。
+请基于 https://github.com/962412311/codex-bootstrap-kit.git，严格按照该 git 仓库的 README 完整部署 Codex 启动脚本和全局 Agent 结构树。
 ```
 
 ## Codex 启动脚本
