@@ -1284,6 +1284,43 @@ run_codex() {
   run_real_codex "$@"
 }
 
+run_usage_detail() {
+  local usage_script="$HOME/codex-usage-detail.py"
+
+  if [ ! -f "$usage_script" ]; then
+    echo "[ERROR] 未找到 Codex 用量脚本：$usage_script" >&2
+    return 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo '[ERROR] 未找到 python3，无法查询 Codex 用量。' >&2
+    return 1
+  fi
+
+  CODEX_USAGE_DETAIL_INTERNAL=1 exec python3 "$usage_script" "$@"
+}
+
+if [ "${CODEX_USAGE_DETAIL_INTERNAL:-}" = '1' ]; then
+  unset CODEX_USAGE_DETAIL_INTERNAL
+
+  if [ -x "$real_codex" ]; then
+    exec "$real_codex" "$@"
+  elif [ -x "/usr/local/bin/codex" ]; then
+    exec "/usr/local/bin/codex" "$@"
+  fi
+
+  echo '[ERROR] 未找到真实 Codex 可执行文件。' >&2
+  exit 127
+fi
+
+if [ "${1:-}" = 'usage' ]; then
+  shift
+  run_usage_detail "$@"
+fi
+
+if [ "$#" -eq 0 ]; then
+  echo '[TIP] 查询 Token 用量：codex usage [天数]（默认 7 天）。'
+fi
+
 check_subscription
 sync_update_artifacts
 if [ -x "$real_codex" ]; then

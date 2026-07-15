@@ -7,6 +7,8 @@ target_dir="$HOME/.codex"
 source_dir="$repo_root/codex-home"
 launcher_source="$repo_root/codex-launcher/codex"
 launcher_target="$HOME/.local/bin/codex"
+usage_source="$repo_root/codex-launcher/codex-usage-detail.py"
+usage_target="$HOME/codex-usage-detail.py"
 archive=""
 tmp_dir=""
 
@@ -81,6 +83,7 @@ if [ -n "$archive" ]; then
   COPYFILE_DISABLE=1 tar -xzf "$archive" -C "$tmp_dir"
   source_dir="$tmp_dir"
   launcher_source="$tmp_dir/codex-launcher/codex"
+  usage_source="$tmp_dir/codex-launcher/codex-usage-detail.py"
 fi
 
 for required in AGENTS.md BOOTSTRAP.md GLOBAL-AGENT.md KARPATHY-INTEGRATION.md RTK.md path.sh global-rules vendor_imports/andrej-karpathy-skills; do
@@ -91,6 +94,10 @@ for required in AGENTS.md BOOTSTRAP.md GLOBAL-AGENT.md KARPATHY-INTEGRATION.md R
 done
 if [ ! -f "$launcher_source" ]; then
   printf 'ERROR: missing archived path: codex-launcher/codex\n' >&2
+  exit 1
+fi
+if [ ! -f "$usage_source" ]; then
+  printf 'ERROR: missing archived path: codex-launcher/codex-usage-detail.py\n' >&2
   exit 1
 fi
 if command -v bash >/dev/null 2>&1; then
@@ -121,6 +128,9 @@ launcher_dir=$(dirname "$launcher_target")
 mkdir -p "$launcher_dir"
 cp "$launcher_source" "$launcher_target"
 chmod 0755 "$launcher_target"
+cp "$usage_source" "$usage_target"
+chmod 0755 "$usage_target"
 
 printf 'deployed=%s\n' "$target_dir"
 printf 'launcher=%s\n' "$launcher_target"
+printf 'usage_script=%s\n' "$usage_target"

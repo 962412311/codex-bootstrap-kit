@@ -5,6 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 source_dir="$repo_root/codex-home"
 launcher_source="$repo_root/codex-launcher/codex"
+usage_source="$repo_root/codex-launcher/codex-usage-detail.py"
 output_dir="${1:-$repo_root/dist}"
 archive="$output_dir/codex-global-agent-tree.tar.gz"
 manifest="$output_dir/codex-global-agent-tree.files"
@@ -43,12 +44,18 @@ if [ ! -f "$launcher_source" ]; then
   printf 'ERROR: launcher not found: %s\n' "$launcher_source" >&2
   exit 1
 fi
+if [ ! -f "$usage_source" ]; then
+  printf 'ERROR: usage script not found: %s\n' "$usage_source" >&2
+  exit 1
+fi
 
 mkdir -p "$output_dir"
 tmp_dir=$(make_tmp_dir)
 mkdir -p "$tmp_dir/codex-launcher"
 cp "$launcher_source" "$tmp_dir/codex-launcher/codex"
+cp "$usage_source" "$tmp_dir/codex-launcher/codex-usage-detail.py"
 chmod 0755 "$tmp_dir/codex-launcher/codex"
+chmod 0755 "$tmp_dir/codex-launcher/codex-usage-detail.py"
 
 {
   find "$source_dir" \
@@ -68,6 +75,7 @@ chmod 0755 "$tmp_dir/codex-launcher/codex"
     -o -type f -print \
     | sed "s|^$source_dir/||"
   printf '%s\n' 'codex-launcher/codex'
+  printf '%s\n' 'codex-launcher/codex-usage-detail.py'
 } | sort > "$manifest"
 
 COPYFILE_DISABLE=1 tar \
@@ -90,7 +98,7 @@ COPYFILE_DISABLE=1 tar \
   --exclude 'shell-snapshots' \
   -czf "$archive" \
   -C "$source_dir" . \
-  -C "$tmp_dir" codex-launcher/codex
+  -C "$tmp_dir" codex-launcher/codex codex-launcher/codex-usage-detail.py
 
 archive_name=${archive##*/}
 if command -v shasum >/dev/null 2>&1; then

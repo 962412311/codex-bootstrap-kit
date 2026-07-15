@@ -7,6 +7,7 @@
 - `codex-home/`：可部署到 `$HOME/.codex` 的 Agent 文件树，按当前全局配置原样镜像
 - `codex-home/path.sh`：Codex 启动 PATH 脚本
 - `codex-launcher/codex`：安装到 `$HOME/.local/bin/codex` 的完整启动 wrapper
+- `codex-launcher/codex-usage-detail.py`：安装到 `$HOME/codex-usage-detail.py` 的 Token 用量查询脚本
 - `codex-home/global-rules/`：按任务类型拆分的全局规则
 - `codex-home/vendor_imports/andrej-karpathy-skills/`：全局规则链依赖的公开 vendor import，排除 `.git/`
 - `scripts/codex-agent-tree/package.sh`：生成部署包
@@ -51,9 +52,10 @@ scripts/codex-agent-tree/deploy.sh \
 
 ## Codex 启动脚本
 
-完整启动链由两个文件组成：
+完整启动链由三个文件组成：
 
 - `codex-launcher/codex` 是实际命令入口，负责更新检查、插件和 skill 同步、订阅检查，并向真实 Codex 注入默认模型参数
+- `codex-launcher/codex-usage-detail.py` 通过 App Server 查询并汇总每日 Token 用量
 - `codex-home/path.sh` 负责整理 `PATH` 并导出 wrapper 使用的启动参数
 
 `codex-home/path.sh` 会：
@@ -78,12 +80,22 @@ CODEX_DEFAULT_MODEL=gpt-5.6-sol CODEX_DEFAULT_REASONING_EFFORT=high codex
 CODEX_STARTUP_HTTP_ATTEMPTS=3 CODEX_TOKEN_REFRESH_MIN_SECONDS=86400 codex
 ```
 
-部署后会同时覆盖 `$HOME/.codex/path.sh` 和 `$HOME/.local/bin/codex`。如果只想手动更新启动链：
+查询最近若干天的 Codex Token 使用量：
+
+```bash
+codex usage 7
+```
+
+天数省略时默认查询最近 `7` 天。直接执行无参数 `codex` 时，启动脚本也会显示该命令提示。用量命令调用 `$HOME/codex-usage-detail.py`，并在脚本内部启动 App Server 时跳过 wrapper 的订阅检查、更新检查和其他启动提示，只输出用量结果。
+
+部署后会同时覆盖 `$HOME/.codex/path.sh`、`$HOME/.local/bin/codex` 和 `$HOME/codex-usage-detail.py`。如果只想手动更新启动链：
 
 ```bash
 mkdir -p "$HOME/.local/bin"
 cp codex-launcher/codex "$HOME/.local/bin/codex"
 chmod 0755 "$HOME/.local/bin/codex"
+cp codex-launcher/codex-usage-detail.py "$HOME/codex-usage-detail.py"
+chmod 0755 "$HOME/codex-usage-detail.py"
 cp codex-home/path.sh "$HOME/.codex/path.sh"
 ```
 
@@ -100,6 +112,7 @@ cp codex-home/path.sh "$HOME/.codex/path.sh"
 - `global-rules/`
 - `vendor_imports/andrej-karpathy-skills/`
 - `$HOME/.local/bin/codex`
+- `$HOME/codex-usage-detail.py`
 
 不会覆盖或删除：
 
