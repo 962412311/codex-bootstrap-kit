@@ -1,34 +1,5 @@
-# RTK - Rust Token Killer (Codex CLI)
+# 长日志压缩
 
-**Usage**: Token-optimized CLI proxy for shell commands.
+`rtk` 可压缩构建、测试与 Git 输出。已安装且兼容时使用，例如 `rtk git status`、`rtk cargo test`；需要精确原始输出时直接使用原生命令。
 
-## Rule
-
-Use `rtk` for noisy or long-running commands where token filtering helps, especially build, test, deploy, git, npm, cargo, and pytest flows.
-
-Use the raw command directly when you need exact output, when inspecting small files, or when `rtk` compatibility is uncertain.
-
-Examples:
-
-```bash
-rtk git status
-rtk cargo test
-rtk npm run build
-rtk pytest -q
-```
-
-## Meta Commands
-
-```bash
-rtk gain            # Token savings analytics
-rtk gain --history  # Recent command savings history
-rtk proxy <cmd>     # Run raw command without filtering
-```
-
-## Verification
-
-```bash
-rtk --version
-rtk gain
-which rtk
-```
+`rtk gain` 查看节省统计，`rtk proxy <cmd>` 原样执行命令。不要为短文件读取增加代理层，也不要仅为普通任务安装该工具。

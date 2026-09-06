@@ -2,6 +2,12 @@
 
 这个仓库用于归档和部署当前 `$HOME/.codex` 的全局 Agent 规则树，不是完整的 Codex 运行态备份。
 
+## 默认上下文
+
+`AGENTS.md` 直接提供简短的全局约定；`BOOTSTRAP.md` 兼容旧项目引用；`GLOBAL-AGENT.md` 是按需索引，任务需要时才读取对应细则。Karpathy 原文独立保留。
+
+记忆和技能目录由运行环境另外注入，仅精简 Markdown 入口不能控制它们。若要保留记忆生成、改为按需检索，可在本机 `config.toml` 的既有 `[memories]` 中设置 `use_memories = false`。部署包不修改此配置。加载边界、验证方法见 [上下文维护](docs/codex-context.md)。
+
 ## 内容
 
 - `codex-home/`：可部署到 `$HOME/.codex` 的 Agent 文件树，按当前全局配置原样镜像
@@ -54,7 +60,7 @@ scripts/codex-agent-tree/deploy.sh \
 
 完整启动链由三个文件组成：
 
-- `codex-launcher/codex` 是实际命令入口，负责更新检查、插件和 skill 同步、订阅检查，并向真实 Codex 注入默认模型参数
+- `codex-launcher/codex` 是实际命令入口，负责 Codex 更新与订阅检查，并向真实 Codex 注入默认模型参数；现有 skill/plugin 同步函数没有接入常规启动链
 - `codex-launcher/codex-usage-detail.py` 通过 App Server 查询并汇总每日 Token 用量
 - `codex-home/path.sh` 负责整理 `PATH` 并导出 wrapper 使用的启动参数
 

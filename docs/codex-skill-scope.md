@@ -1,51 +1,35 @@
 # Codex Skill Scope
 
-This repository does not back up or install automatically managed skill
-contents. It records the curated local scope that is expected in the active
-Codex environment, and separately archives the public Karpathy vendor import
-referenced by the global Agent rule tree.
+This repository packages the public Karpathy vendor import used by its global
+rules. It does not install or archive other skills, plugins, or runtime state.
 
-## Tracked Scope
+## Local maintenance scope
 
-The following non-system skill names are allowed in the current local Codex
-setup:
+The local skill entrypoints reviewed on 2026-09-06 are:
 
-- `doc-coauthoring`
-- `docx`
-- `mcp-builder`
-- `modbus-semantics`
-- `mthings-config`
-- `mthings-to-ini`
-- `mthings-xml-config`
-- `neat-freak`
-- `patch-context-hygiene`
-- `pdf`
-- `pptx`
-- `protocol-alarm-records`
-- `protocol-business-cropping`
-- `protocol-config-audit`
-- `protocol-excel-point-table`
-- `protocol-modeling`
-- `protocol-reporting`
-- `protocol-source-intake`
-- `protocol-write-points`
-- `test-driven-development`
-- `web-access`
-- `xlsx`
+- `arm-crosscompile-test`: the configured QtWorkData ARM host workflow.
+- `chronicle`: screen-history lookup, subject to runtime prerequisites.
+- `hatch-pet`: Codex v2 animated pet creation and validation.
+- `imagegen-game-art-pipeline`: generated game art and asset delivery.
+- `neat-freak`: project documentation and handoff reconciliation.
+- `stage-based-execution`: repeatable operations with verifiable stages.
+- `karpathy-guidelines`: the public vendor principles, preserved unchanged.
 
-## Explicitly Not Backed Up
+Skill names and descriptions can enter initial context; skill bodies and
+references should be loaded only for matching work. Keep descriptions short
+and specific. Generic commands such as Git or SSH do not identify an ARM
+deployment task.
 
-- Official Codex system skills under `.system`, including `imagegen`,
-  `openai-docs`, `plugin-creator`, `skill-creator`, and `skill-installer`.
-- Automatically installed or auto-updated skill/plugin trees.
-- Private project skills and project-specific runtime snapshots.
-- Codex session history, memories, shell snapshots, caches, and local trust
-  entries from `config.toml`.
-- The `.git/` directory inside `vendor_imports/andrej-karpathy-skills/`.
+## Boundaries
 
-## Maintenance Rule
+The active catalog is supplied by each client. Do not treat a historical list
+as an allowlist, restore removed skills from it, or edit versioned plugin
+caches to change discovery. Local skill edits need separate maintenance;
+review them when reinstalling or updating their source packages.
 
-If the active local skill list changes, update this document as a scope record
-only. Do not copy skill directories into this repository unless there is a
-separate explicit decision to vendor a specific public skill or public vendor
-import used by the global Agent rule tree.
+Official `.system` skills, automatically managed skills/plugins, private
+project skills, memories, sessions, caches, credentials and trust settings
+are excluded from this repository. The vendor import excludes its `.git/`.
+
+Record scope changes here; do not copy additional skill contents into the
+repository without an explicit decision to vendor them.
