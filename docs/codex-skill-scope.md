@@ -1,35 +1,19 @@
-# Codex Skill Scope
+# Skill 与插件范围
 
-This repository packages the public Karpathy vendor import used by its global
-rules. It does not install or archive other skills, plugins, or runtime state.
+2026-09-06 的本机维护决定如下。运行配置不随本仓库部署，实际加载以客户端为准。
 
-## Local maintenance scope
+| 类别 | 状态 |
+|---|---|
+| `arm-crosscompile-test`、`neat-freak` | 保留。分别提供具体 ARM 环境知识与文档同步能力 |
+| `chronicle`、`hatch-pet`、`imagegen-game-art-pipeline` | 用户确认停用，文件留存 |
+| `stage-based-execution`、`karpathy-guidelines` | 通用流程重复，停用自动加载；原资料留存 |
+| `docx`、`pdf`、`mcp-builder` 本地技能 | 沿用停用状态 |
+| `template-creator`、`visualize` | 用户确认停用 |
+| `superpowers` | 停用，避免重新带入重复的全局流程 |
+| `deep-research-work` | 用户明确保留 |
+| 浏览器、桌面操作、GitHub、Codex 管理及插件管理 | 保留常用开发和操作能力 |
+| 官方系统技能 | 由客户端维护，保留 |
 
-The local skill entrypoints reviewed on 2026-09-06 are:
+本地 `skills.config` 使用实际 SKILL.md 路径。账户侧预置插件不能仅凭本地 enabled 标记判定已停用；默认模板库通过其连接器 `connector_openai_default_templates` 的开关控制，并核实有效状态。
 
-- `arm-crosscompile-test`: the configured QtWorkData ARM host workflow.
-- `chronicle`: screen-history lookup, subject to runtime prerequisites.
-- `hatch-pet`: Codex v2 animated pet creation and validation.
-- `imagegen-game-art-pipeline`: generated game art and asset delivery.
-- `neat-freak`: project documentation and handoff reconciliation.
-- `stage-based-execution`: repeatable operations with verifiable stages.
-- `karpathy-guidelines`: the public vendor principles, preserved unchanged.
-
-Skill names and descriptions can enter initial context; skill bodies and
-references should be loaded only for matching work. Keep descriptions short
-and specific. Generic commands such as Git or SSH do not identify an ARM
-deployment task.
-
-## Boundaries
-
-The active catalog is supplied by each client. Do not treat a historical list
-as an allowlist, restore removed skills from it, or edit versioned plugin
-caches to change discovery. Local skill edits need separate maintenance;
-review them when reinstalling or updating their source packages.
-
-Official `.system` skills, automatically managed skills/plugins, private
-project skills, memories, sessions, caches, credentials and trust settings
-are excluded from this repository. The vendor import excludes its `.git/`.
-
-Record scope changes here; do not copy additional skill contents into the
-repository without an explicit decision to vendor them.
+本仓库只保留公开 Karpathy 原文，不复制私有技能、插件缓存、凭据、会话或记忆。停用时优先保留可恢复文件；重新安装或升级后，用原生技能和插件清单检查实际加载结果。

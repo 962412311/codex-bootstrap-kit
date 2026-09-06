@@ -8,8 +8,8 @@
 
 - `codex-home/` 只放需要手动同步到 `$HOME/.codex` 的初始化文件和全局 Agent 规则文件
 - `codex-home/` 应按当前 `$HOME/.codex` 的 Agent 文件树原样同步，不额外改写路径
-- `codex-home/global-rules/` 归档当前全局规则树
-- `codex-home/vendor_imports/` 只归档全局 Agent 规则链明确依赖的公开 vendor import，不归档其 `.git/`
+- `codex-home/global-rules/` 保留旧部署结构兼容说明，不恢复已移除的通用规则
+- `codex-home/vendor_imports/` 只归档已决定保留的公开 vendor 参考，不归档其 `.git/`
 - `scripts/codex-agent-tree/` 维护打包和白名单覆盖部署脚本
 - 部署脚本必须兼容 macOS 自带 `/bin/sh`、BSD `tar`、BSD `mktemp`、系统 `rsync` 和 `shasum`；不要引入 GNU-only 参数
 - `codex-launcher/codex` 必须同时兼容 macOS 与 WSL/Linux；用户 HOME 解析不得硬编码 `/Users` 或 `/home`，平台专用命令必须有对应分支或回退

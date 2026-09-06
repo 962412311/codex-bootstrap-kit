@@ -4,7 +4,7 @@
 
 ## 默认上下文
 
-`AGENTS.md` 直接提供简短的全局约定；`BOOTSTRAP.md` 兼容旧项目引用；`GLOBAL-AGENT.md` 是按需索引，任务需要时才读取对应细则。Karpathy 原文独立保留。
+`AGENTS.md` 只保留用户偏好。`BOOTSTRAP.md` 和 `GLOBAL-AGENT.md` 兼容旧引用，不再加载通用规则树；Karpathy 原文作为可选资料保留。实现范围、方法与验证深度由实际目标决定。
 
 记忆和技能目录由运行环境另外注入，仅精简 Markdown 入口不能控制它们。若要保留记忆生成、改为按需检索，可在本机 `config.toml` 的既有 `[memories]` 中设置 `use_memories = false`。部署包不修改此配置。加载边界、验证方法见 [上下文维护](docs/codex-context.md)。
 
@@ -14,8 +14,8 @@
 - `codex-home/path.sh`：Codex 启动 PATH 脚本
 - `codex-launcher/codex`：安装到 `$HOME/.local/bin/codex` 的完整启动 wrapper
 - `codex-launcher/codex-usage-detail.py`：安装到 `$HOME/codex-usage-detail.py` 的 Token 用量查询脚本
-- `codex-home/global-rules/`：按任务类型拆分的全局规则
-- `codex-home/vendor_imports/andrej-karpathy-skills/`：全局规则链依赖的公开 vendor import，排除 `.git/`
+- `codex-home/global-rules/`：旧部署结构的兼容说明
+- `codex-home/vendor_imports/andrej-karpathy-skills/`：保留原文的可选参考，排除 `.git/`
 - `scripts/codex-agent-tree/package.sh`：生成部署包
 - `scripts/codex-agent-tree/deploy.sh`：部署 `.codex` 文件树和启动 wrapper
 - `dist/codex-global-agent-tree.tar.gz`：当前已生成的部署包
